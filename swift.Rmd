@@ -1,0 +1,550 @@
+---
+title: "TaylorSwift"
+author: "Asbóth Hanna"
+date: "2023-12-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(scales)
+library(gtable)
+library(ggh4x)
+library(tayloRswift)
+library(corrplot)
+library(VGAM)
+library(psych)
+library(car)
+library(tidyverse)
+library(lmtest) 
+library(pscl) 
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+
+# Reading the data
+
+swift_raw <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-10-17/taylor_all_songs.csv')
+
+head(swift_raw)
+
+
+```
+
+## Handling original and Taylor's version: Creating a new column, that represents if the album is owned by Taylor Swift
+
+Here you can read the story behind "Taylor's verions" albums: <https://www.today.com/popculture/music/taylors-version-meaning-swift-rerecording-albums-rcna98513>
+
+The list of albums that were/will be re-recorded:
+
+'Taylor Swift', 2006. 'Fearless', 2008 -- ('Fearless -- Taylor's Version' was released in April 2021). 'Speak Now', 2010 -- ('Speak Now -- Taylor's Version' was released July 7, 2023). 'Red', 2012 -- ('Red -- Taylor's Version' was released in November 2021). '1989', 2014 -- ('1989 -- Taylor's Version' released on 27th October 2023). 'Reputation', 2017
+
+(source: <https://www.capitalfm.com/news/taylor-swift-albums-rerecording-songs/>)
+
+```{r}
+
+# Creating a row for Taylor's Vesion
+
+swift <- swift_raw %>% 
+  mutate(taylors_version = ifelse(grepl("(Taylor's Version)", album_name), TRUE, FALSE))
+
+head(swift)
+
+
+# Creating a list of the rerecorded albums
+
+albums_rerecorded <- swift %>% 
+  filter(taylors_version == TRUE) %>% 
+  mutate(album_name = str_remove(album_name, fixed("(Taylor's Version)"))) %>% 
+  select(album_name) %>% 
+  unique()
+  
+print(albums_rerecorded)
+
+# Creating a list of albums with two versions
+
+albums_with_two_versions <- c("Fearless", "Fearless (Taylor's Version)", "Red", "Red (Taylor's Version)" )
+
+```
+
+## Comparing original and rerecorded albums by musical properties
+
+I wanted to explore if there are differences between original and rerecorded songs regarding musical characteristics, such as danceability, energy, loudness, acousticness, valence, speechiness, tempo and instrumentalness,
+
+
+```{r}
+
+# Creating a dataset, with the rerecorded albums, and their original versions and I excluded songs, which only appear on the original or the rerecorded version
+
+swift_original_rerecorded <- swift %>% 
+  filter(album_name %in% albums_with_two_versions) %>% 
+  mutate(track_name = str_remove(track_name, fixed(" (Taylor's Version)"))) %>% 
+  mutate(track_name = str_remove(track_name, fixed(" [Taylor's Version]"))) %>% 
+  group_by(track_name) %>% 
+  mutate(n = n()) %>% 
+  filter(n == 2) %>% 
+  ungroup() %>% 
+  select(album_name, danceability, energy, loudness, acousticness, instrumentalness, valence, speechiness, tempo) 
+
+# Descriptive statistics of each musical characteristics
+
+describe(swift_original_rerecorded$danceability)
+
+describe(swift_original_rerecorded$energy)
+
+describe(swift_original_rerecorded$loudness)
+
+describe(swift_original_rerecorded$acousticness)
+
+describe(swift_original_rerecorded$instrumentalness)
+
+describe(swift_original_rerecorded$valence)
+
+describe(swift_original_rerecorded$speechiness)
+
+describe(swift_original_rerecorded$tempo)
+
+```
+
+ Instrumentalness have a small range (min = 0, max = 0.03), so I decided, to not include it in the plot of the albums.
+
+```{r}
+
+# Excluding instrumentalness and transforming the data to long form, and adding the original album variable
+
+long_swift_original_rerecorded <- swift_original_rerecorded %>%
+  pivot_longer(
+    cols = -c(album_name),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+
+long_swift_original_rerecorded <- long_swift_original_rerecorded %>% 
+  mutate(taylors_version = ifelse(grepl("(Taylor's Version)", album_name), TRUE, FALSE)) %>% 
+  mutate(
+    original_album = case_when(
+      grepl("Red", album_name) ~ "Red",
+      grepl("Fearless", album_name) ~ "Fearless")) %>% 
+  filter(variable != "instrumentalness")
+
+
+# Creating a plot describing the musical characteristics, of original and rerecorded albums
+
+ggplot(long_swift_original_rerecorded, aes(x = album_name, y = value, color = taylors_version)) +
+  geom_point(position = position_jitter(width = 0.2, height = 0)) +
+  theme_minimal() + # setting theme
+  facet_grid2(original_album ~ variable, scales = "free_y", independent = "y", shrink = TRUE,) + # creating panels, by musical characteristics and original albums, setting free y, since the musical characteristics are ranked on different scales
+  scale_y_continuous(labels = scales::comma_format()) + # setting y axis comma formatted
+  labs(title = "Musical characteristics of original and rerecorded albums") + # adding title
+  theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 10), strip.text = element_text(size = 8, angle = 60, hjust = 0.5),
+, axis.title.x = element_blank(),
+    axis.title.y = element_blank() ) +  # setting text elements on the plot
+  scale_color_taylor(labels = c("Taylor's Version", "Original Album")) + # adding Taylor color scale 
+  guides(color = guide_legend(title = " "))  # adding color guide without title
+```
+
+# Musical profile of different albums
+
+I wanted to explore, how musical characteristics differ between all albums. I only included original albums in this analysis, and I also excluded the Holiday Collection albums, since on this album the song are covers, and I wanted to focus, on how Taylor Swift's style changed throughout her career.
+
+
+
+```{r}
+
+# Creating a table with the original albums and excluding the Holiday Collection
+
+swift_originals <- swift %>% 
+  filter(album_name != "The Taylor Swift Holiday Collection", taylors_version == FALSE) %>% 
+  select(album_name, danceability, energy, loudness, acousticness, valence, speechiness, tempo) %>% 
+  na.omit()
+
+# Transforming the table into long format
+
+long_swift_originals <- swift_originals %>%
+  pivot_longer(cols = -album_name, 
+               names_to = "variable", 
+               values_to = "value")
+
+# Standardizing the scales of each variable to make them more easy to compare
+
+long_swift_originals_standardized <- long_swift_originals %>% 
+  group_by(variable) %>% 
+  mutate(value = scale(value, center = TRUE, scale = TRUE)) 
+
+# Chronological order of albums
+
+album_order <- c("Taylor Swift", "Fearless", "Speak Now", "Red", "1989", "reputation", "Lover", "folklore", "evermore", "Midnights")
+
+
+# Reorder album_name based on the chronological order
+
+long_swift_originals_standardized$album_name <- factor(
+  long_swift_originals_standardized$album_name,
+  levels = album_order
+)
+
+# Create the plot with reordered panels
+ggplot(long_swift_originals_standardized, aes(x = variable, y = value, color = variable)) +
+  geom_point(position = position_jitter(width = 0.2, height = 0)) + # creating scatter plot and setting jitter 
+  theme_minimal() + # adding theme minimal
+  facet_wrap(~album_name, ncol = 4, shrink = TRUE) + # creating panels by album name
+  theme(panel.spacing = unit(1, "lines"), strip.text = element_text(size = 8)) + # adjusting panel spacing and text size
+  labs(title = "Musical profile of each album") + # adding title
+  theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 8), strip.text = element_text(size = 7.5), axis.title.x = element_blank(), axis.title.y = element_blank()) + # setting text elements on the plot
+  scale_color_taylor() + # adding Taylor color scale 
+  guides(color = guide_legend(title = NULL)) + # color guide without title
+  coord_cartesian(ylim = c(-3, 3)) # zooming in to make the plot more readable
+
+
+
+
+
+
+
+```
+
+# Exploring how albums differ by the proportion of songs in major key
+
+Major keys in music is usually associated with happiness, while minor keys are more associated with sadness. I wanted to explore how albums differ by the proportion of song in major key, since it seemed to be a good indicator of the overall mood of the album.
+
+```{r}
+
+# Creating a table of the original albums, and adding a column proportion of song in major key
+
+prop_major_swift <- swift %>% 
+  filter(taylors_version == FALSE) %>% 
+  select(album_name, mode, track_number) %>%
+  na.omit() %>% 
+  filter(album_name != "The Taylor Swift Holiday Collection") %>% 
+  group_by(album_name) %>% 
+  mutate(number_of_tracks = max(track_number)) %>% 
+  mutate(sum_major = sum(mode == 1)) %>% 
+  mutate(prop_major = sum_major/number_of_tracks)
+
+# Ordering albums according the variable with chronological order
+
+prop_major_swift$album_name <- factor(
+  prop_major_swift$album_name,
+  levels = album_order
+)
+
+# Creating a by the proportion of songs in major key
+
+ggplot(prop_major_swift, aes(x = album_name, y = prop_major, fill = album_name)) +
+  geom_bar(stat = "identity", width = 0.7, position = "dodge") +
+  labs(y = NULL, 
+        x = NULL,
+        title = "Proportion of songs in major key")+ # adding labels and title
+  scale_fill_taylor() + # addig Taylor Swift color scale
+  scale_x_discrete(guide = guide_axis(angle = 45)) + # adding legend title
+  guides(fill = FALSE)+ # turning of color guide
+  theme_minimal() # adding theme minimal
+
+view(prop_major_swift)
+
+  
+```
+## Creating models to explore musical profile of albums made during the COVID quarantines
+
+Taylor Swift created the albums titled folklore and evermore during COVID quarantines. I wanted to explore, if these album differ in their musical characteristics, from the rest of Taylor Swift's discography. 
+
+For that I wanted to use a logistic regression model, where the predictors are different musical characteristics, and the response variable is a two level factor describing if the song was created in isolation or not. 
+
+First, I wanted to explore, how musical characteristics relate to each other. 
+
+
+```{r}
+
+# Creating a plot of correlation between musical characteristics
+
+corrplot(cor( cor(swift_originals[, -1])), method="color", addCoef.col = "black") 
+
+```
+Since there is a strong (> 0.9) correlation between energy and loudness, energy and acousticness and acousticness and loudness, I decided to use only one of them to avoid the violation of the assumption of multicollinearity. 
+
+According to the plot describing the musical profile of each album, acousticness seemed to be the variable distinguishing the albums made in isolation most, from the rest of the discography, so I decided to keep that variable. 
+
+To explore the differences between albums made during the pandemic from other albums, I to created two logistic regression models. The first, simple model only contains acousticness as a predictor, since, acourding to my explanatory analysis this seemed to be the stronger predictor. The more complex model contains other musical characteristics as well. The predictors of the complex model are: acousticness, danceability, acousticness, tempo, valence, speechiness and mode.
+
+
+```{r}
+
+# Creating list containing albums made during the pandemic and the rest of the discography 
+
+non_pandemic <- c("Taylor Swift", "Fearless", "Speak Now", "Red", "1989", "Lover", "Midnights", "reputation") 
+
+during_pandemic <- c("folklore", "evermore")
+
+# Creating a table with a new variable showing if the album was made during isolation
+
+swift_pandemic <- swift %>% 
+  filter(album_name != "The Taylor Swift Holiday Collection", taylors_version == FALSE) %>% 
+  select(album_name, track_name, danceability, acousticness, valence, speechiness, tempo, mode) %>% 
+  mutate(
+    pandemic = case_when(
+      album_name %in% non_pandemic ~ 0,
+      album_name %in% during_pandemic ~ 1,
+    )
+  ) %>% 
+  na.omit()
+
+
+# Building the simple and the complex model
+
+mod_simple <- glm(pandemic ~ acousticness , data = swift_pandemic, family = "binomial")
+
+mod_complex <- glm(pandemic ~ danceability + acousticness + valence + speechiness + tempo + mode , data = swift_pandemic, family = "binomial")
+
+```
+# Checking the assumption of linearity 
+
+```{r}
+
+# Checking the assumption of linearity for the simple model
+
+mod_simple_linearity <- glm(pandemic ~ acousticness + (acousticness:log(acousticness)), 
+            data=swift_pandemic, 
+            family=binomial(link="logit"))
+logodds <- mod_simple_linearity$linear.predictors
+summary(mod_simple_linearity)
+
+```
+
+The simple model meets the assumption of linearity.
+
+```{r}
+# Checking the assumption of linearity for the complex model
+
+mod_complex_liearity <- glm(pandemic ~ danceability + (danceability:log(danceability)) + acousticness + (acousticness:log(acousticness)) + valence + (valence:log(valence)) + speechiness + (speechiness:log(speechiness)) + tempo + (tempo:log(tempo)) + mode, 
+            data=swift_pandemic, 
+            family=binomial(link="logit"))
+logodds <- mod_complex_liearity$linear.predictors
+summary(mod_complex_liearity)
+
+
+```
+Tempo predictor in the complex model violates the assumption of linearity. Since it also has a strong correlation with danceability (r = -64), I decided to excude it from the model.
+
+```{r}
+
+# Updating the complex model
+
+mod_complex <- glm(pandemic ~ danceability + acousticness + valence + speechiness  + mode , data = swift_pandemic, family = "binomial")
+
+# Checking the assumption of linearity for the complex model
+
+mod_complex_liearity <- glm(pandemic ~ danceability + (danceability:log(danceability)) + acousticness + (acousticness:log(acousticness)) + valence + (valence:log(valence)) + speechiness + (speechiness:log(speechiness)) + mode, 
+            data=swift_pandemic, 
+            family=binomial(link="logit"))
+logodds <- mod_complex_liearity$linear.predictors
+summary(mod_complex_liearity)
+
+
+mod_pandemic <- glm(pandemic ~  acousticness + (acousticness:log(acousticness)), 
+            data=swift_pandemic, 
+            family=binomial(link="logit"))
+logodds <- mod_pandemic$linear.predictors
+summary(mod_pandemic)
+
+```
+
+The updated complex model meets the assumption of linearity.
+
+#Checking outliers
+
+
+```{r}
+
+# Checking for the simple model
+
+# Calculating Cook's distance
+
+cooksd <- cooks.distance(mod_simple)
+
+# Plotting Cook's distance
+
+mod_simple %>%
+  plot(which = 4)
+
+# Calculating which datapoints, have a Cook's distance greater than 4/N
+
+influential_obs <- which(cooksd > 4 / nrow(swift_pandemic))
+
+# Marking them on the plot
+
+text(influential_obs, cooksd[influential_obs], labels = influential_obs, col = "red", cex = 0.8, pos = 4)
+
+# There are some data points, which have a greater Cook's distance than 4/N, but neither of them is greater than 1.
+
+# Checking for the complex model
+
+# Calculating Cook's distance
+
+cooksd <- cooks.distance(mod_complex)
+
+# Plotting Cook's distance
+
+mod_complex %>%
+  plot(which = 4)
+
+# Calculating which datapoints, have a Cook's distance greater than 4/N
+
+influential_obs <- which(cooksd > 4 / nrow(swift_pandemic))
+
+# Marking them on the plot
+
+text(influential_obs, cooksd[influential_obs], labels = influential_obs, col = "red", cex = 0.8, pos = 4)
+
+# There are some data points, which have a greater Cook's distance than 4/N, but neither of them is greater than 1.
+
+```
+
+There are no influential outliers in the models.
+
+## Evaluating the models
+
+For this section I used this document: https://github.com/kekecsz/PSZB17-210-Data-analysis-seminar/blob/master/seminar_10/S10_Logisztikus-regresszio.pdf
+
+```{r}
+
+summary(mod_simple)
+summary(mod_complex)
+
+# Creating the null model
+
+mod_null = glm(pandemic ~ 1, family = binomial(), data = swift_pandemic)
+
+# Calculating AIC 
+
+AIC(mod_null, mod_simple, mod_complex)
+
+# Comparing models using likelihood ratio test with the null model and with each other
+
+lrtest(mod_null, mod_simple)
+
+lrtest(mod_null, mod_complex)
+
+lrtest(mod_simple, mod_complex)
+
+# Calculating McFadden Pseudo Rˆ2 
+
+pR2(mod_null)
+pR2(mod_simple)
+pR2(mod_complex)
+
+# Making predictions using the simple model
+
+swift_pandemic = swift_pandemic %>%
+  mutate(pred_mod_simple = predict(mod_simple)) %>%
+  mutate(pred_mod_simple = case_when(pred_mod_simple <= 0 ~ 0,
+        pred_mod_simple > 0 ~ 1))
+
+#  Coding correct guesses
+swift_pandemic = swift_pandemic %>%
+  mutate(correct_prediction = case_when(pred_mod_simple == pandemic ~ "correct",
+                                        pred_mod_simple != pandemic ~ "incorrect"))
+
+# Caltulating categorization rate overall
+swift_pandemic %>%
+  group_by(correct_prediction) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+# Calculating proportion of correct prediction by categories
+
+# Calculating percentage of songs made during the pandemic
+
+swift_pandemic %>%
+  group_by(pandemic) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+# Creating a crosstab a song was made during the pandemic and predicted values
+
+swift_pandemic %>%
+  group_by(pandemic, pred_mod_simple) %>%
+  summarize(n = n()) %>%
+  spread(pandemic, n)
+
+# Calculating the proportion of cases that were correctly categorized 
+
+# Pandemic
+
+swift_pandemic %>%
+  filter(pandemic == 1) %>%
+  group_by(correct_prediction) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+# Non pandemic
+
+swift_pandemic %>%
+  filter(pandemic == 0) %>%
+  group_by(correct_prediction) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+# Making predictions using the complex model
+
+swift_pandemic = swift_pandemic %>%
+  mutate(pred_mod_complex = predict(mod_complex)) %>%
+  mutate(pred_mod_complex = case_when(pred_mod_complex <= 0 ~ 0,
+                                     pred_mod_complex > 0 ~ 1))
+
+#  Coding correct guesses
+swift_pandemic = swift_pandemic %>%
+  mutate(correct_prediction = case_when(pred_mod_complex == pandemic ~ "correct",
+                                        pred_mod_complex != pandemic ~ "incorrect"))
+
+# Caltulating categorization rate overall
+swift_pandemic %>%
+  group_by(correct_prediction) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+# Calculating proportion of correct prediction by categories
+
+# Creating a crosstab of if a song was made during the pandemic and predicted values
+
+swift_pandemic %>%
+  group_by(pandemic, pred_mod_complex) %>%
+  summarize(n = n()) %>%
+  spread(pandemic, n)
+
+# Calculating the proportion of cases that were correctly categorized 
+
+# Pandemic
+
+swift_pandemic %>%
+  filter(pandemic == 1) %>%
+  group_by(correct_prediction) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+# Non pandemic
+
+swift_pandemic %>%
+  filter(pandemic == 0) %>%
+  group_by(correct_prediction) %>%
+  summarise(count = n()) %>%
+  mutate(freq = count / sum(count))
+
+```
+I built two binomial logistic regression models to explore how the two albums Taylor Swift created during COVID quarantines differ from the rest of her discography in musical characteristics. In both models, the dependent variable was, wether the album, the song was on, was created during quarantines (the reference level was, that it was not made during the pandemic). In the simple model, the only predictor was the acousticness score of the song, in the complex model the mode of the song (minor or major) and danceability, acousticness, tempo, valence, speechiness scores were also involved.
+
+Tthe simple model showed significantly better fit to the data than the null model (Chiˆ2 = 78.316, df = 2, p < 0.001, simple modell AIC = 98.45,-2LL = 47.22, null modell AIC = 174.76, -2LL-= 86.38). The model explained 45% of the varience (McFadden Rˆ2 = 0.45). 19 % of the songs in the sample were made during the pandemic . The model predicted correctly that a song was made during the pandemic in the 67% of all cases, in 67% of all cases the model predicted corretly that a song was not made in isolatin, overall 86% of the predistions were correct.
+90% volt.”
+The complex model showed significantly better fit to the data than the null model (Chiˆ2 = 93.857, df = 2, p < 0.001, complex model AIC = 90.9, -2LL= 39.4530278, null model AIC = 174.76, -2LL-je = 86.38). The model explained 54% of the varience (McFadden Rˆ2 = 0.54).The model explained 45% of the varience (McFadden Rˆ2 = 0.45). 19 % of the songs in the sample were made during the pandemic . The model predicted correctly that a song was made during the pandemic in the 73% of all cases, in 95% of all cases the model predicted corretly that a song was not made in isolatin, overall 87% of the predistions were correct.
+
+The complex model showed significantly better fit to the data than the null modell (Chiˆ2 = 15.54 , df = 2, p < 0.005). The complex model coefficients showed, that danceability, acousticness  and valence were significant predictors while speechiness and mode were not. In the case of speechiness this could be explained with the low varience. As I mentioned before minor and major is usually associated with happiness and sadness but they can also channel different and more complex feelings or moods as well which could appear in throughout all albums. 
+
+Although the complex model showed significantly better fit, the difference in explained varience was less than 10% after adding the four other predictors to the simple model, which means that the main difference between the songs made isolation and the rest of Swift's albums was in acousticness.
